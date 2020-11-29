@@ -2,70 +2,11 @@ import os
 import time
 import subprocess
 import numpy as np
-import pandas as pd
-from io import StringIO
 from lammps_logfile import File
 from lammps_analyzer import average
 from lammps_simulator import Simulator
 from lammps_simulator.computer import CPU
-
-
-def write_water(charge, volume=None, massdensity=None,
-                numberdensity=None, filename="water.lammps"):
-    """Write lammps data file for a single water molecule
-    """
-    assert [numberdensity, massdensity, volume].count(None) == 2, \
-        "Either volume or density has to be given"
-
-    if numberdensity is not None:
-        volume = 1 / numberdensity
-    if massdensity is not None:
-        molmass = 18.01528
-        volume = molmass / massdensity
-
-    cell_length = volume**(1/3)
-    assert cell_length > 2.1, "unit cell needs a length > 2.1 Å"
-
-    with open(filename, 'w') as f:
-        f.write("LAMMPS 'data.' description\n\n")
-        f.write("        3 atoms\n")
-        f.write("        2 bonds\n")
-        f.write("        1 angles\n\n")
-        f.write("        2 atom types\n")
-        f.write("        1 bond types\n")
-        f.write("        1 angle types\n\n")
-        f.write(f"     0.0 {cell_length:>4.1f}     xlo xhi\n")
-        f.write(f"     0.0 {cell_length:>4.1f}     ylo yhi\n")
-        f.write(f"     0.0 {cell_length:>4.1f}     zlo zhi\n\n")
-        f.write("Atoms\n\n")
-        f.write(f"     1    1   2  {charge[2]:>7.4f}   1.55000    1.55000    1.50000\n")
-        f.write(f"     2    1   1  {charge[1]:>7.4f}   1.55000    2.30695    2.08588\n")
-        f.write(f"     3    1   1  {charge[1]:>7.4f}   1.55000    0.79305    2.08588\n\n")
-        f.write("Bonds\n\n")
-        f.write("      1   1     1     2\n")
-        f.write("      2   1     1     3\n\n")
-        f.write("Angles\n\n")
-        f.write("      1   1     2     1     3\n")
-
-
-def check_squeue(user):
-    """Returns the job IDs of user
-    """
-    output = subprocess.check_output(['squeue', '-u', user])
-    stuff = output.split()
-    stuff = stuff[8:]
-    job_ids = np.asarray(stuff[::8], dtype=int)
-    return job_ids
-
-
-def latest_job_id(user):
-    """Return job ID of the previously submitted job
-    """
-    output = subprocess.check_output(['squeue', '-u', user])
-    data = output.split()
-    data = data[8:]
-    job_ids = np.asarray(data[::8], dtype=int)
-    return np.max(job_ids)
+from .utils import write_water, check_squeue, latest_job_id
 
 
 class ClapeyronEquation:
@@ -79,7 +20,7 @@ class ClapeyronEquation:
         self.dh, self.dv = dh, dv
 
     def __call__(self, beta, p):
-        return - self.dh / (beta * p * self.dv)
+        return self.dh / (beta * p * self.dv)
 
 
 class GibbsDuhem:
@@ -103,7 +44,7 @@ class GibbsDuhem:
     """
 
     def __init__(self, T_init, p_init, wd="gibbs-duhem", overwrite=False):
-        wd_prop = wd    # proposed working directory
+        self.wd = wd    # proposed working directory
         if overwrite:
             try:
                 os.makedirs(wd)
@@ -114,12 +55,13 @@ class GibbsDuhem:
             repeat = True
             while repeat:
                 try:
-                    os.makedirs(wd_prop)
+                    os.makedirs(self.wd)
                     repeat = False
                 except FileExistsError:
                     ext += 1
-                    wd_prop = wd + f"_{ext}"
-        os.chdir(wd_prop)
+                    self.wd = wd + f"_{ext}"
+
+        self.wd += "/"
 
         self.beta = 1/T_init
         self.p = p_init
@@ -145,6 +87,7 @@ class GibbsDuhem:
     def _run_init(self, rho, n, box_id):
         """Run simulation to initialize/equilibrate system
         """
+        sd = self.wd + f"init_{box_id}"     # simulation directory
 
         datafile = "H2O.molecule"
         paramfile = "H2O.TIP4P"
@@ -165,20 +108,19 @@ class GibbsDuhem:
 
         # get LAMMPS script
         this_dir, this_filename = os.path.split(__file__)
-        lammps_script = os.path.join(this_dir, "../lammps/tip4p/gibbsduhem/in.init")
-        paramfile = os.path.join(this_dir, "../lammps/tip4p/gibbsduhem/H2O.TIP4P")
+        lammps_script = os.path.join(this_dir, "lammps/tip4p/in.init")
+        paramfile = os.path.join(this_dir, "lammps/tip4p/H2O.TIP4P")
 
         # run system
-        sim = Simulator(directory=f"init_{box_id}", overwrite=False)
-        wd = sim.wd
+        sim = Simulator(directory=sd, overwrite=False)
         sim.copy_to_wd(datafile, paramfile)
         sim.set_input_script(lammps_script, **var)
         sim.run(self.computer)
 
         if box_id == 1:
-            self.restart1 = wd + restartfile
+            self.restart1 = sd + "/" + restartfile
         else:
-            self.restart2 = wd + restartfile
+            self.restart2 = sd + "/" + restartfile
 
     def _run_npt(self, restart, box_id):
         """Run NPT simulation in LAMMPS to find equilibration enthalpy
@@ -194,31 +136,32 @@ class GibbsDuhem:
         :type T: float
         """
 
+        sd = self.wd + f"iter_{box_id}"
+
         paramfile = 'H2O.TIP4P'
         restartfileout = "restart.bin"
 
         var = {'press': self.p,
                'temp': 1/self.beta,
                'paramfile': paramfile,
-               'restartfilein': '../' + restart,
+               'restartfilein':  restart,
                'restartfileout': restartfileout}
 
         # get LAMMPS script
         this_dir, this_filename = os.path.split(__file__)
-        lammps_script = os.path.join(this_dir, "../lammps/tip4p/gibbsduhem/in.restart")
-        paramfile = os.path.join(this_dir, "../lammps/tip4p/gibbsduhem/H2O.TIP4P")
+        lammps_script = os.path.join(this_dir, "lammps/tip4p/in.restart")
+        paramfile = os.path.join(this_dir, "lammps/tip4p/H2O.TIP4P")
 
         # run system
-        sim = Simulator(directory=f"iter_{box_id}", overwrite=False)
-        wd = sim.wd
+        sim = Simulator(directory=sd, overwrite=False)
         sim.copy_to_wd(paramfile)
         sim.set_input_script(lammps_script, **var)
         sim.run(self.computer)
 
         if box_id == 1:
-            self.restart1 = wd + "/" + restartfileout
+            self.restart1 = sd + "/" + restartfileout
         else:
-            self.restart2 = wd + "/" + restartfileout
+            self.restart2 = sd + "/" + restartfileout
 
         if self.computer.slurm:
             job_id = latest_job_id(self.user)
@@ -233,7 +176,7 @@ class GibbsDuhem:
                     time.sleep(5)
 
         # analyze simulations
-        logger = File(wd + "/log.lammps")
+        logger = File(sd + "/log.lammps")
         volume = logger.get("Volume", run_num=1)
         enthalpy = logger.get("Enthalpy", run_num=1)
         density = logger.get("Density", run_num=1)
@@ -315,7 +258,8 @@ class GibbsDuhem:
 
         if write:
             # write first line of output file
-            f =  open(write, 'w')
+            outfile = self.wd + "/" + write
+            f = open(outfile, 'w')
             f.write("p T dv dh \n")
 
         converged = False
@@ -358,40 +302,3 @@ class GibbsDuhem:
         if write:
             f.close()
         return p_list, T_list, V_vap, H_vap
-
-
-class Read:
-    def __init__(self, filename):
-        if hasattr(filename, "read"):
-            output = filename
-        else:
-            output = open(filename, 'r')
-        self.read_file(output)
-
-    def read_file(self, fileobj):
-        """Read Gibbs-Duhem output file
-        """
-        string = fileobj.readline()  # string should start with the kws
-        self.keywords = string.split()
-        contents = fileobj.read()
-        self.contents = pd.read_table(StringIO(string + contents), sep=r'\s+')
-
-    def find(self, entry_name):
-        return np.asarray(self.contents[entry_name])
-
-    def get_keywords(self):
-        """Return list of available data columns in the log file."""
-        print(", ".join(self.keywords))
-
-
-if __name__ == "__main__":
-    rho1 = 0.97
-    rho2 = 0.00022
-    T_init = 370
-    p_init = 0.36
-    p_final = 1.01325
-
-    gibbsduhem = GibbsDuhem(T_init, p_init)
-    gibbsduhem.set_box1(rho1, 6, 6, 6)
-    gibbsduhem.set_box2(rho2, 6, 6, 6)
-    p, T, V, H = gibbsduhem.run(computer=CPU(num_procs=36, lmp_exec="lmp_mpi"), dbeta=1e-5, write="output.dat")
