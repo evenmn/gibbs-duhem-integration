@@ -1,0 +1,33 @@
+# Reference: M. Orsi, Comparative assessment of the ELBA coarse-grained
+# model for water, Molecular Physics (2014), 112, 1566-1576
+#
+# There are four required arguments:
+# 1. paramfile: parameter file
+# 2. restartfilein: restart file in
+# 3. restartfileout: restart file out
+# 4. temp: new temperature
+# 5. press: new pressure
+#
+
+read_restart ${restartfilein}
+include ${paramfile}
+
+neigh_modify every 1 delay 0 check yes
+fix constrain all shake 1.0e-4 100 0 b 1 a 1
+
+timestep 2.0
+
+
+thermo_style custom step time atoms temp vol enthalpy etotal pe press pxx pyy pzz density spcpu cpuremain
+thermo 10
+# dump 1 all atom 100 dump.lammpstrj
+
+# Equilibration
+fix npt all npt temp ${temp} ${temp} 100.0 iso ${press} ${press} 100.0
+run 1000
+
+# Production
+run 2000
+
+unfix npt
+write_restart ${restartfileout}
