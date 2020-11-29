@@ -61,7 +61,7 @@ class GibbsDuhem:
                     ext += 1
                     self.wd = wd + f"_{ext}"
 
-        self.wd += "/"
+        self.wd = os.getcwd() + "/" + self.wd + "/"
 
         self.beta = 1/T_init
         self.p = p_init
@@ -121,6 +121,7 @@ class GibbsDuhem:
             self.restart1 = sd + "/" + restartfile
         else:
             self.restart2 = sd + "/" + restartfile
+
 
     def _run_npt(self, restart, box_id):
         """Run NPT simulation in LAMMPS to find equilibration enthalpy
