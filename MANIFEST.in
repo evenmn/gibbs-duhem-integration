@@ -1,0 +1,4 @@
+# include LAMMPS script for TIP4P
+include gibbsduhem/lammps/tip4p/in.init
+include gibbsduhem/lammps/tip4p/in.restart
+include gibbsduhem/lammps/tip4p/H2O.TIP4P
