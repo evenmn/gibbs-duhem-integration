@@ -6,6 +6,7 @@ from lammps_logfile import File
 from lammps_analyzer import average
 from lammps_simulator import Simulator
 from lammps_simulator.computer import CPU
+from .analyze import Read
 from .utils import write_water, check_squeue, latest_job_id
 
 
@@ -95,7 +96,7 @@ class GibbsDuhem:
 
         var = {'press': self.p,
                'temp': 1/self.beta,
-               'seed': 68885,
+               'seed': np.random.uniform(10000, 100000),
                'datafile': datafile,
                'paramfile': paramfile,
                'restartfile': restartfile,
