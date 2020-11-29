@@ -1,11 +1,12 @@
-from gibbsduhem.analyze import Read
+from gibbsduhem import Read
 import matplotlib.pyplot as plt
 
-analyze = Read("Blk.prp")
-density = analyze.find("DENSITY")
-nummol = analyze.find("TOT_MOL")
+output = Read("output.dat")
+temp = output.find("T")
+press = output.find("p")
 
-plt.plot(density)
-plt.xlabel("Step")
-plt.ylabel("Density [g/cm^3]")
+plt.plot(temp, press)
+plt.xlabel("Temperature [K]")
+plt.ylabel("Pressure [kPa]")
+plt.grid()
 plt.show()
