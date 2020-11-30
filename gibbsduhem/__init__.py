@@ -1,6 +1,5 @@
 import os
 import time
-import subprocess
 import numpy as np
 from lammps_logfile import File
 from lammps_analyzer import average
@@ -13,9 +12,9 @@ from .utils import write_water, check_squeue, latest_job_id
 class ClapeyronEquation:
     """Clapeyron equation,
 
-                              dh
-    f(beta, p; dh, dv) = - ---------
-                           beta p dv
+                              dh           T dh
+    f(beta, p; dh, dv) = - --------- = - --------
+                           beta p dv       p dv
     """
     def __init__(self, dh, dv):
         self.dh, self.dv = dh, dv
@@ -32,10 +31,10 @@ class GibbsDuhem:
     :type N1: int
     :param N2: number of molecules in box 2
     :type N2: int
-    :param rho1: mass density of box 1, given in g/cm^3
-    :type rho1: float
-    :param rho2: mass density of box 2, given in g/cm^3
-    :type rho2: float
+    :param rhoA: mass density of box 1, given in g/cm^3
+    :type rhoA: float
+    :param rhoB: mass density of box 2, given in g/cm^3
+    :type rhoB: float
     :param beta_init: initial beta-value, beta = 1/kT
     :type beta_init: float
     :param p_init: initial pressure value given in bar
@@ -64,26 +63,28 @@ class GibbsDuhem:
 
         self.wd = os.getcwd() + "/" + self.wd + "/"
 
-        self.beta = 1/T_init
+        self.T = T_init
         self.p = p_init
-        self.rho1 = None
-        self.rho2 = None
-        self.n1 = None
-        self.n2 = None
-        self.restart1 = None
-        self.restart2 = None
+        self.rhoA = None
+        self.rhoB = None
+        self.nA = None
+        self.nB = None
+        self.restartA = None
+        self.restartB = None
+        self.seedA = np.random.randint(10000, 100000)
+        self.seedB = np.random.randint(10000, 100000)
 
-    def set_box1(self, rho, nx, ny, nz):
+    def set_box_A(self, rho, nx, ny, nz):
         """Set system box 1
         """
-        self.rho1 = rho
-        self.n1 = (nx, ny, nz)
+        self.rhoA = rho
+        self.nA = (nx, ny, nz)
 
-    def set_box2(self, rho, nx, ny, nz):
+    def set_box_B(self, rho, nx, ny, nz):
         """Set system box 2
         """
-        self.rho2 = rho
-        self.n2 = (nx, ny, nz)
+        self.rhoB = rho
+        self.nB = (nx, ny, nz)
 
     def _run_init(self, rho, n, box_id):
         """Run simulation to initialize/equilibrate system
@@ -95,8 +96,8 @@ class GibbsDuhem:
         restartfile = "restart.bin"
 
         var = {'press': self.p,
-               'temp': 1/self.beta,
-               'seed': np.random.uniform(10000, 100000),
+               'temp': self.T,
+               'seed': np.random.randint(10000, 100000),
                'datafile': datafile,
                'paramfile': paramfile,
                'restartfile': restartfile,
@@ -118,11 +119,10 @@ class GibbsDuhem:
         sim.set_input_script(lammps_script, **var)
         sim.run(self.computer)
 
-        if box_id == 1:
-            self.restart1 = sd + "/" + restartfile
+        if box_id == "A":
+            self.restartA = sd + "/" + restartfile
         else:
-            self.restart2 = sd + "/" + restartfile
-
+            self.restartB = sd + "/" + restartfile
 
     def _run_npt(self, restart, box_id):
         """Run NPT simulation in LAMMPS to find equilibration enthalpy
@@ -144,7 +144,7 @@ class GibbsDuhem:
         restartfileout = "restart.bin"
 
         var = {'press': self.p,
-               'temp': 1/self.beta,
+               'temp': self.T,
                'paramfile': paramfile,
                'restartfilein':  restart,
                'restartfileout': restartfileout}
@@ -160,10 +160,10 @@ class GibbsDuhem:
         sim.set_input_script(lammps_script, **var)
         sim.run(self.computer)
 
-        if box_id == 1:
-            self.restart1 = sd + "/" + restartfileout
+        if box_id == "A":
+            self.restartA = sd + "/" + restartfileout
         else:
-            self.restart2 = sd + "/" + restartfileout
+            self.restartB = sd + "/" + restartfileout
 
         if self.computer.slurm:
             job_id = latest_job_id(self.user)
@@ -178,7 +178,7 @@ class GibbsDuhem:
                     time.sleep(5)
 
         # analyze simulations
-        logger = File(sd + "/log.lammps")
+        logger = File(sim.wd + "/log.lammps")
         volume = logger.get("Volume", run_num=1)
         enthalpy = logger.get("Enthalpy", run_num=1)
         density = logger.get("Density", run_num=1)
@@ -207,7 +207,7 @@ class GibbsDuhem:
         :rtype: float
         """
         conversion_factor = 0.0039687835
-        return conversion_factor * dh / (self.beta * p * dv)
+        return - conversion_factor * self.T * dh / (p * dv)
 
     def _predict_p(self, f):
         """Predict pressure based on one fugacity value f
@@ -217,7 +217,7 @@ class GibbsDuhem:
         :returns: predicted pressure
         :rtype: float
         """
-        return self.p * np.exp(self.dbeta * f)
+        return self.p * np.exp(f * self.dbeta)
 
     def _correct_p(self, f0, f1):
         """Compute pressure based on two fugacity values f1 and f2
@@ -231,7 +231,7 @@ class GibbsDuhem:
         """
         return self.p * np.exp(self.dbeta * (f0 + f1) / 2)
 
-    def run(self, maxiter=100, dbeta=0.001, computer=CPU(num_procs=4),
+    def run(self, maxiter=100, dT=1.0, computer=CPU(num_procs=4),
             write=False, user="", p_final=1.01325):
         """Run Gibbs-Duhem integration.
 
@@ -242,33 +242,31 @@ class GibbsDuhem:
         """
 
         # declare global parameters
-        self.dbeta = dbeta
         self.computer = computer
         self.user = user
 
         # declare empty list to be filled up
         p_list = []
         T_list = []
-        rho1_list = []
-        rho2_list = []
+        rhoA_list = []
+        rhoB_list = []
         V_vap = []
         H_vap = []
 
         # run equilibration simulations
-        self._run_init(self.rho1, self.n1, 1)
-        self._run_init(self.rho2, self.n2, 2)
+        self._run_init(self.rhoA, self.nA, "A")
+        self._run_init(self.rhoB, self.nB, "B")
 
         if write:
             # write first line of output file
-            outfile = self.wd + "/" + write
-            f = open(outfile, 'w')
-            f.write("p T dv dh \n")
+            f = open(self.wd + "/" + write, 'w')
+            f.write("p T dv dh rhoA rhoB\n")
 
         converged = False
         iter = 0
         while iter < maxiter and not converged:
-            v1, h1, rho1 = self._run_npt(self.restart1, 1)
-            v2, h2, rho2 = self._run_npt(self.restart2, 2)
+            v1, h1, rhoA = self._run_npt(self.restartA, "A")
+            v2, h2, rhoB = self._run_npt(self.restartB, "B")
             Dv = v2 - v1
             Dh = h2 - h1
 
@@ -276,14 +274,17 @@ class GibbsDuhem:
             print(f"Enthalpy difference is {Dh} kcal/mol")
 
             p_list.append(self.p)
-            T_list.append(1/self.beta)
-            rho1_list.append(rho1)
-            rho2_list.append(rho2)
+            T_list.append(self.T)
+            rhoA_list.append(rhoA)
+            rhoB_list.append(rhoB)
             V_vap.append(Dv)
             H_vap.append(Dh)
 
             if write:
-                f.write(f"{self.p} {1/self.beta} {Dv} {Dh} \n")
+                f.write(f"{self.p} {self.T} {Dv} {Dh} {rhoA} {rhoB} \n")
+                f.flush()
+
+            self.dbeta = 1/(self.T+dT) - 1/self.T
 
             # from integrators import PredictorCorrector
             # integrator = PredictorCorrector(self.dbeta, ClapeyronEquation(Dh, Dv))
@@ -292,9 +293,9 @@ class GibbsDuhem:
 
             f0 = self._compute_f(self.p, Dv, Dh)
             p_pred = self._predict_p(f0)
-            print(f"p_pred: {p_pred} atm")
-            self.beta += self.dbeta
-            print(f"Temp: {1/self.beta} K")
+            print(f"p_pred: {p_pred} bar")
+            self.T += dT
+            print(f"Temp: {self.T} K")
             f1 = self._compute_f(p_pred, Dv, Dh)
             if self.p > p_final:
                 converged = True
