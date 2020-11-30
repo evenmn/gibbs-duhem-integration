@@ -17,19 +17,19 @@ gibbsduhem = GibbsDuhem(T_init=370.0, p_init=0.36)
 ```
 The two boxes with water and vapor, respectively, have to set with initial densities and initial number of particles. The densities have to be the ones found from the GEMC simulations.
 ``` python
-gibbsduhem.set_box1(rho=0.970, nx=6, ny=6, nz=6)
-gibbsduhem.set_box2(rho=2.2e-4, nx=6, ny=6, nz=6)
+gibbsduhem.set_box_A(rho=0.970, nx=6, ny=6, nz=6)
+gibbsduhem.set_box_B(rho=2.2e-4, nx=6, ny=6, nz=6)
 ```
-Here, `nx`, `ny` and `nz` are the number of particles in x, y and z-direction, respectively. Now, we are ready to run the Gibbs-Duhem simulation. Running on 4 CPU cores with the "lmp_mpi" executable with step length 1e-5 is done by the following lines:
+Here, `nx`, `ny` and `nz` are the number of particles in x, y and z-direction, respectively. Now, we are ready to run the Gibbs-Duhem simulation. Running on 4 CPU cores with the "lmp_mpi" executable with step length 1.0 is done by the following lines:
 ``` python
 computer = CPU(num_procs=4, lmp_exec="lmp_mpi")
-gibbsduhem.run(computer=computer, dbeta=1e-5)
+gibbsduhem.run(computer=computer, dT=1.0)
 ```
 
 ### Analyzing output files
 To get an output file, one has to use the `run` argument `write`:
 ``` python
-gibbsduhem.run(computer=computer, dbeta=1e-5, write="output.dat")
+gibbsduhem.run(computer=computer, dT=1.0, write="output.dat")
 ```
 This output file can then be analyzed using the `Read` object:
 ``` python
