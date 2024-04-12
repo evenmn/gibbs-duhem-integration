@@ -12,4 +12,4 @@ gibbsduhem.set_box_A(rho1, 6, 6, 6)
 gibbsduhem.set_box_B(rho2, 6, 6, 6)
 
 computer = CPU(num_procs=30, lmp_exec="lmp_mpi")
-gibbsduhem.run(computer=computer, dT=1.0, write="output.dat")
+gibbsduhem.run(computer=computer, dT=0.1, write="output.dat")
